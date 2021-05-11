@@ -2,11 +2,27 @@ package william;
 
 import com.mergebase.util.Java2Json;
 
-import java.io.*;
-import java.util.*;
-import java.util.regex.*;
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.io.PrintWriter;
+import java.io.StringReader;
+import java.io.UnsupportedEncodingException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.Locale;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.zip.GZIPInputStream;
-import java.nio.file.*;
 
 public class UsnToJson {
     private static void printUsage() {
@@ -28,21 +44,44 @@ public class UsnToJson {
 
         Path path = Paths.get(args[0]);
         if (Files.isDirectory(path)) {
-            String[] fileList = new File(args[0]).list();
-            for (String filename : fileList) {
-                Path directoryEntry = Paths.get(args[0], filename);
-                if (Files.isRegularFile(directoryEntry) || Files.isSymbolicLink(directoryEntry)) {
-                    processFile(directoryEntry.toString(), writeToStdout);
-                }
-            }
+            scan(path, writeToStdout);
         } else if (Files.isRegularFile(path)) {
-            processFile(args[0], writeToStdout);
+            processFile(path.toString(), writeToStdout);
         }
     }
 
-    private static LinkedHashMap<String, Object> reorder(LinkedHashMap<String, Object> usn) {
+    private static void scan(Path dir, boolean writeToStdout) {
+        File[] files = dir.toFile().listFiles();
+        if (files != null) {
+            for (File f : files) {
+                Path p = f.toPath();
+                if (Files.isRegularFile(p) || Files.isSymbolicLink(p)) {
+                    processFile(p.toString(), writeToStdout);
+                } else if (Files.isDirectory(p)) {
+                    scan(p, writeToStdout);
+                }
+            }
+        }
+    }
+
+
+    private static LinkedHashMap<String, Object> reorder(LinkedHashMap<String, Object> usn, StringBuilder rawMsg) {
         LinkedHashMap<String, Object> orderedUsn = new LinkedHashMap<>();
 
+        StringReader sr = new StringReader(rawMsg.toString());
+        BufferedReader br = new BufferedReader(sr);
+        ArrayList<String> lines = new ArrayList<>();
+        String line;
+        try {
+            while ((line = br.readLine()) != null) {
+                lines.add(line);
+            }
+        } catch (IOException ioe) {
+            String errMsg = "impossible situation because BufferedReader backed by StringReader - " + ioe;
+            throw new RuntimeException(errMsg, ioe);
+        }
+
+        orderedUsn.put("raw_email", lines);
         orderedUsn.put("message-id", usn.getOrDefault("message-id", ""));
         orderedUsn.put("id", usn.getOrDefault("id", ""));
         orderedUsn.put("date", usn.getOrDefault("date", ""));
@@ -54,14 +93,23 @@ public class UsnToJson {
         return orderedUsn;
     }
 
-    private static void printToFile(LinkedHashMap<String, Object> usn, String year, String month) {
-        Object id = usn.get("id");
-        if (id == null || !(id instanceof String) || ((String) id).length() < 1) {
+    private static void printToFile(
+            LinkedHashMap<String, Object> usn, StringBuilder rawMsg, String year, String month, boolean writeToStdOut
+    ) {
+        usn = reorder(usn, rawMsg);
+        if (writeToStdOut) {
+            printToStdout(usn, rawMsg);
             return;
         }
 
+        Object id = usn.get("id");
+        if (!(id instanceof String) || ((String) id).length() < 1) {
+            return;
+        }
+
+
         String usnCode = (String) id;
-        String dirname = Paths.get("USN", year, month).toString();
+        String dirname = Paths.get("USN", year, fixMonth(month)).toString();
         String filename = Paths.get(dirname, usnCode + ".json").toString();
         System.out.printf("Writing to %s ...\n", filename);
 
@@ -69,9 +117,9 @@ public class UsnToJson {
         try {
             new File(dirname).mkdirs();
             printWriter = new PrintWriter(new FileWriter(filename));
-            printWriter.print(Java2Json.format(true, reorder(usn)));
+            printWriter.print(Java2Json.format(true, usn));
         } catch (IOException e) {
-            System.out.println(e.toString());
+            System.out.println(e);
         } finally {
             if (printWriter != null) {
                 printWriter.close();
@@ -79,15 +127,15 @@ public class UsnToJson {
         }
     }
 
-    private static void printToStdout(LinkedHashMap<String, Object> usn) {
+    private static void printToStdout(LinkedHashMap<String, Object> usn, StringBuilder rawMsg) {
         // no point printing if we didn't get the USN code
         Object id = usn.get("id");
-        if (id == null || !(id instanceof String) || ((String) id).length() < 1) {
+        if (!(id instanceof String) || ((String) id).length() < 1) {
             return;
         }
 
-        System.out.printf("Dumping %s to stdout...\n", (String) id);
-        System.out.print(Java2Json.format(true, reorder(usn)));
+        System.out.printf("Dumping %s to stdout...\n", id);
+        System.out.print(Java2Json.format(true, reorder(usn, rawMsg)));
         System.out.println();
     }
 
@@ -117,7 +165,7 @@ public class UsnToJson {
     }
 
     public static void processFile(String filename, String compression, String year, String month, String encoding,
-            boolean writeToStdout) {
+                                   boolean writeToStdout) {
         if (filename == null || filename.length() < 1) {
             return;
         }
@@ -152,19 +200,19 @@ public class UsnToJson {
             Pattern initialFromLine = Pattern.compile(
                     "^From\\s+\\S+\\s+at\\s+\\S+\\s+\\w{3}\\s+\\w{3}\\s+\\d{1,2}\\s+\\d{2}:\\d{2}:\\d{2}\\s+\\d{4}\\s*$");
 
-            Pattern messageIdLine = Pattern.compile("^Message-ID:\\s+(<[\\w\\.@]+>)\\s*$");
+            Pattern messageIdLine = Pattern.compile("^Message-ID:\\s+(<[\\w.@]+>)\\s*$");
 
             // match the USN code inside brackets, and
             // match project name which is everything before the last word (may be
             // vulnerability, regression, ...)
-            Pattern subjectLine = Pattern.compile("^Subject:\\s+\\[(USN-[^\\]]+)\\]\\s+(.+)\\s+\\w+\\s*$");
+            Pattern subjectLine = Pattern.compile("^Subject:\\s+\\[(USN-[^]]+)]\\s+(.+)\\s+\\w+\\s*$");
 
             Pattern dateLine = Pattern.compile("^Date:\\s+(\\S.*\\S)\\s*$");
 
             Pattern summaryLine = Pattern.compile("^Summary:\\s*$");
 
             Pattern referencesLine = Pattern.compile("^References:\\s*$");
-            Pattern cveLine = Pattern.compile("^  CVE-\\d{4}-\\d{4,7}.*$");
+            Pattern cveLine = Pattern.compile("^ {2}CVE-\\d{4}-\\d{4,7}.*$");
             // this ASCII bar is used for the special section after Message-ID:
             // before 2011-May, this section contains the CVE lines
             // some of these have trailing spaces, some may be longer than 59 chars
@@ -175,19 +223,20 @@ public class UsnToJson {
                     .compile("^The problem can be corrected by (installing|updating|upgrading) .*");
             // I have seen only LTS and ESM tags after the version number
             Pattern ubuntuVersionLine = Pattern.compile("^Ubuntu\\s+(\\S.*\\S)(\\s+(LTS|ESM))?:\\s*$");
-            Pattern safePackageVersionLine = Pattern.compile("^  (\\S+)\\s+(\\S+)\\s*$");
+            Pattern safePackageVersionLine = Pattern.compile("^ {2}(\\S+)\\s+(\\S+)\\s*$");
 
             String inputLine;
 
             boolean firstUsnFound = false;
             LinkedHashMap<String, Object> usn = new LinkedHashMap<>();
+            StringBuilder raw = new StringBuilder();
 
-            inputLine = bufferedReader.readLine();
+            inputLine = readNextLine(raw, bufferedReader);
             boolean readNextInputLine = false;
             while (true) {
                 // always read next line, unless it's been read already
                 if (readNextInputLine) {
-                    inputLine = bufferedReader.readLine();
+                    inputLine = readNextLine(raw, bufferedReader);
                 } else {
                     readNextInputLine = true;
                 }
@@ -196,11 +245,8 @@ public class UsnToJson {
                 // end of stream, print if we have some valid data
                 if (inputLine == null) {
                     if (firstUsnFound) {
-                        if (writeToStdout) {
-                            printToStdout(usn);
-                        } else {
-                            printToFile(usn, year, month);
-                        }
+                        printToFile(usn, raw, year, month, writeToStdout);
+                        raw = new StringBuilder();
                     }
                     break;
                 }
@@ -210,11 +256,8 @@ public class UsnToJson {
                 Matcher matcher = initialFromLine.matcher(inputLine);
                 if (matcher.matches()) {
                     if (firstUsnFound) {
-                        if (writeToStdout) {
-                            printToStdout(usn);
-                        } else {
-                            printToFile(usn, year, month);
-                        }
+                        printToFile(usn, raw, year, month, writeToStdout);
+                        raw = new StringBuilder();
                     } else {
                         firstUsnFound = true;
                         usn = new LinkedHashMap<>();
@@ -255,17 +298,21 @@ public class UsnToJson {
                     // skip over the empty lines after the section label
                     // stop when we find the next non-empty line
                     do {
-                        inputLine = bufferedReader.readLine().trim();
-                    } while (inputLine != null && inputLine.length() < 1);
+                        inputLine = readNextLine(raw, bufferedReader);
+                        if (inputLine == null) {
+                            break;
+                        }
+                        inputLine = inputLine.trim();
+                    } while (inputLine.length() < 1);
 
                     // summary is the first non-empty lines after the section label
                     // stop when we find the next empty line
-                    String tmpDescription = inputLine;
-                    while ((inputLine = bufferedReader.readLine()) != null && inputLine.length() > 0) {
-                        tmpDescription += " " + inputLine.trim();
+                    StringBuilder tmpDescription = new StringBuilder(inputLine != null ? inputLine : "");
+                    while ((inputLine = readNextLine(raw, bufferedReader)) != null && inputLine.length() > 0) {
+                        tmpDescription.append(" ").append(inputLine.trim());
                     }
 
-                    usn.put("description", tmpDescription);
+                    usn.put("description", tmpDescription.toString());
 
                     // the next line has already been read
                     readNextInputLine = false;
@@ -283,18 +330,18 @@ public class UsnToJson {
                 if (matcher.matches()) {
                     // read all lines beginning with two spaces
                     // stop when the line does not begin with two spaces
-                    String tempCveStr = "";
-                    while ((inputLine = bufferedReader.readLine()) != null && inputLine.startsWith("  ")) {
+                    StringBuilder tempCveStr = new StringBuilder();
+                    while ((inputLine = readNextLine(raw, bufferedReader)) != null && inputLine.startsWith("  ")) {
                         // some lines beginning with two spaces are not CVEs
                         // we only want the CVEs
                         if (cveLine.matcher(inputLine).matches()) {
-                            tempCveStr += " " + inputLine.trim();
+                            tempCveStr.append(" ").append(inputLine.trim());
                         }
                     }
 
                     // Note: in 2011-April, some CVE's are not separated by a comma
-                    ArrayList<String> tmpCveList = new ArrayList<String>(
-                            Arrays.asList(tempCveStr.trim().split("\\s*(,|\\s)\\s*")));
+                    ArrayList<String> tmpCveList = new ArrayList<>(
+                            Arrays.asList(tempCveStr.toString().trim().split("\\s*(,|\\s)\\s*")));
                     usn.put("cves", tmpCveList);
 
                     // the next line has already been read
@@ -322,19 +369,19 @@ public class UsnToJson {
                 if (matcher.matches()) {
                     // look for the section end marker
                     // System.out.println("MASUK " + inputLine);
-                    String tempCveStr = "";
-                    while ((inputLine = bufferedReader.readLine()) != null
+                    StringBuilder tempCveStr = new StringBuilder();
+                    while ((inputLine = readNextLine(raw, bufferedReader)) != null
                             && !inputLine.startsWith("===========================================================")) {
                         // the keywords may not appear at the start of the line
                         // System.out.println("DEBUG " + inputLine);
                         if (inputLine.contains("CVE-") || inputLine.contains("CAN-")) {
-                            tempCveStr += " " + inputLine.trim();
+                            tempCveStr.append(" ").append(inputLine.trim());
                         }
                     }
 
                     // Note: in 2011-April, some CVE's are not separated by a comma
-                    ArrayList<String> tmpCveList = new ArrayList<String>(
-                            Arrays.asList(tempCveStr.trim().split("\\s*(,|\\s)\\s*")));
+                    ArrayList<String> tmpCveList = new ArrayList<>(
+                            Arrays.asList(tempCveStr.toString().trim().split("\\s*(,|\\s)\\s*")));
 
                     // filter this list, because some entries are not CAN / CVE
                     // ignore MFSA and USN in this section
@@ -343,13 +390,9 @@ public class UsnToJson {
                     usn.put("cves", tmpCveList);
 
                     // if the last line read in was the closing marker, read another line
-                    if (inputLine != null
-                            && inputLine.startsWith("===========================================================")) {
-                        readNextInputLine = true;
-                    } else {
-                        // the next line has already been read
-                        readNextInputLine = false;
-                    }
+                    // the next line has already been read
+                    readNextInputLine = inputLine != null
+                            && inputLine.startsWith("===========================================================");
 
                     continue;
                 }
@@ -386,7 +429,7 @@ public class UsnToJson {
                 if (matcher.matches()) {
                     // skip lines after the section header, until we find a Ubuntu version line
                     // or we find an empty line
-                    while ((inputLine = bufferedReader.readLine()) != null) {
+                    while ((inputLine = readNextLine(raw, bufferedReader)) != null) {
                         if (ubuntuVersionLine.matcher(inputLine).matches()) {
                             break;
                         }
@@ -405,28 +448,28 @@ public class UsnToJson {
                         // - ignore empty lines
                         // - as soon as we find a non-empty line that does not match a ubuntu version
                         // ..line or a safe package version line, we know that the section has ended
-                        if ((m = ubuntuVersionLine.matcher(inputLine)) != null && m.matches()) {
+                        m = ubuntuVersionLine.matcher(inputLine);
+                        if (m.matches()) {
                             ubuntuVersion = m.group(1);
-                        } else if ((m = safePackageVersionLine.matcher(inputLine)) != null && m.matches()) {
-                            LinkedHashMap<String, String> tmpSafeVersion = new LinkedHashMap<>();
-                            tmpSafeVersion.put("ubuntu", ubuntuVersion);
-                            tmpSafeVersion.put("pkg", m.group(1));
-                            tmpSafeVersion.put("v", m.group(2));
-                            tmpSafeVersionList.add(tmpSafeVersion);
-                        } else if (inputLine.trim().length() < 1) {
-                            // ignore
                         } else {
-                            break;
+                            m = safePackageVersionLine.matcher(inputLine);
+                            if (m.matches()) {
+                                LinkedHashMap<String, String> tmpSafeVersion = new LinkedHashMap<>();
+                                tmpSafeVersion.put("ubuntu", ubuntuVersion);
+                                tmpSafeVersion.put("pkg", m.group(1));
+                                tmpSafeVersion.put("v", m.group(2));
+                                tmpSafeVersionList.add(tmpSafeVersion);
+                            } else if (inputLine.trim().length() >= 1) {
+                                break;
+                            }
                         }
 
-                        inputLine = bufferedReader.readLine();
-                        continue;
+                        inputLine = readNextLine(raw, bufferedReader);
                     }
                     usn.put("safeVersions", tmpSafeVersionList);
 
                     // the next line has already been read
                     readNextInputLine = false;
-                    continue;
                 }
             }
         } catch (FileNotFoundException e) {
@@ -444,8 +487,45 @@ public class UsnToJson {
                 }
             }
         }
-
-        return;
     }
 
+    private static String readNextLine(StringBuilder buf, BufferedReader br) throws IOException {
+        String line = br.readLine();
+        if (line != null) {
+            buf.append(line.trim()).append('\n');
+        }
+        return line;
+    }
+
+    private static String fixMonth(String s) {
+        s = s != null ? s.trim().toLowerCase(Locale.ROOT) : "";
+        switch (s) {
+            case "january":
+                return "01-January";
+            case "february":
+                return "02-February";
+            case "march":
+                return "03-March";
+            case "april":
+                return "04-April";
+            case "may":
+                return "05-May";
+            case "june":
+                return "06-June";
+            case "july":
+                return "07-July";
+            case "august":
+                return "08-August";
+            case "september":
+                return "09-September";
+            case "october":
+                return "10-October";
+            case "november":
+                return "11-November";
+            case "december":
+                return "12-December";
+            default:
+                return s;
+        }
+    }
 }
