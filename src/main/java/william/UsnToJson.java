@@ -64,7 +64,6 @@ public class UsnToJson {
         }
     }
 
-
     private static LinkedHashMap<String, Object> reorder(LinkedHashMap<String, Object> usn, StringBuilder rawMsg) {
         LinkedHashMap<String, Object> orderedUsn = new LinkedHashMap<>();
 
@@ -93,12 +92,17 @@ public class UsnToJson {
         return orderedUsn;
     }
 
-    private static void printToFile(
-            LinkedHashMap<String, Object> usn, StringBuilder rawMsg, String year, String month, boolean writeToStdOut
-    ) {
+    private static void printToFile(LinkedHashMap<String, Object> usn, StringBuilder rawMsg, String year, String month,
+            boolean writeToStdOut) {
+        // remove the "id" key after printing, otherwise if we fail to parse the next
+        // email, the output file may be overwritten
+        // this is evident in USN-1093-1, where the Subject: line is not parsed
+        // correctly
+
         usn = reorder(usn, rawMsg);
         if (writeToStdOut) {
             printToStdout(usn, rawMsg);
+            usn.remove("id");
             return;
         }
 
@@ -106,7 +110,6 @@ public class UsnToJson {
         if (!(id instanceof String) || ((String) id).length() < 1) {
             return;
         }
-
 
         String usnCode = (String) id;
         String dirname = Paths.get("USN", year, fixMonth(month)).toString();
@@ -125,6 +128,8 @@ public class UsnToJson {
                 printWriter.close();
             }
         }
+
+        usn.remove("id");
     }
 
     private static void printToStdout(LinkedHashMap<String, Object> usn, StringBuilder rawMsg) {
@@ -165,7 +170,7 @@ public class UsnToJson {
     }
 
     public static void processFile(String filename, String compression, String year, String month, String encoding,
-                                   boolean writeToStdout) {
+            boolean writeToStdout) {
         if (filename == null || filename.length() < 1) {
             return;
         }
@@ -202,10 +207,18 @@ public class UsnToJson {
 
             Pattern messageIdLine = Pattern.compile("^Message-ID:\\s+(<[\\w.@]+>)\\s*$");
 
-            // match the USN code inside brackets, and
-            // match project name which is everything before the last word (may be
-            // vulnerability, regression, ...)
-            Pattern subjectLine = Pattern.compile("^Subject:\\s+\\[(USN-[^]]+)]\\s+(.+)\\s+\\w+\\s*$");
+            // There are multiple formats for Subject: line
+            // Some don't even have the USN code, we ignore those
+            // Pattern subjectLine =
+            // Pattern.compile("^Subject:\\s+\\[(USN-[^]]+)]\\s+(.+)\\s+\\w+\\s*$");
+            Pattern subjectLine = Pattern.compile("^Subject:\\s+\\[(USN-[^]]+)].*$");
+            // 2021-March.txt:Subject: [USN-4883-1] Linux kernel vulnerabilities
+            // 2021-March.txt:Subject: [USN-4884-1] Linux kernel (OEM) vulnerabilities
+            // 2021-March.txt:Subject: [USN-4885-1] Pygments vulnerability
+
+
+
+
 
             Pattern dateLine = Pattern.compile("^Date:\\s+(\\S.*\\S)\\s*$");
 
@@ -216,7 +229,12 @@ public class UsnToJson {
             // this ASCII bar is used for the special section after Message-ID:
             // before 2011-May, this section contains the CVE lines
             // some of these have trailing spaces, some may be longer than 59 chars
-            Pattern equals59xLine = Pattern.compile("^===========================================================*\\s*$");
+            Pattern equals59xLine = Pattern
+                    .compile("^===========================================================*\\s*$");
+            // Pattern ubuntuSecurityNoticeLine = Pattern.compile("^Ubuntu Security
+            // Notice\\s*((\\s*)|(USN-\\d+-\\d+\\s+.*\\d{4}))\\s*$");
+            Pattern ubuntuSecurityNoticeLine = Pattern
+                    .compile("^Ubuntu Security Notice USN-\\d+-\\d+(|\\s+.*\\d{4})\\s*$");
 
             Pattern updateInstructionsLine = Pattern.compile("^Update instructions:\\s*$");
             Pattern theProblemLine = Pattern
@@ -366,6 +384,9 @@ public class UsnToJson {
 
                 // System.out.println("CHECK " + inputLine);
                 matcher = equals59xLine.matcher(inputLine);
+                if (!matcher.matches()) {
+                    matcher = ubuntuSecurityNoticeLine.matcher(inputLine);
+                }
                 if (matcher.matches()) {
                     // look for the section end marker
                     // System.out.println("MASUK " + inputLine);
@@ -492,6 +513,8 @@ public class UsnToJson {
     private static String readNextLine(StringBuilder buf, BufferedReader br) throws IOException {
         String line = br.readLine();
         if (line != null) {
+            // line is trimmed before being stored in the buffer
+            // should we preserve the leading spaces and use stripTrailing() instead?
             buf.append(line.trim()).append('\n');
         }
         return line;
