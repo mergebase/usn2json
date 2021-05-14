@@ -67,6 +67,8 @@ public class UsnToJson {
     private static LinkedHashMap<String, Object> reorder(LinkedHashMap<String, Object> usn, StringBuilder rawMsg) {
         LinkedHashMap<String, Object> orderedUsn = new LinkedHashMap<>();
 
+        // can we use rawMsg.toString().split("\\n") instead?
+        // then convert the String array into ArrayList<String>
         StringReader sr = new StringReader(rawMsg.toString());
         BufferedReader br = new BufferedReader(sr);
         ArrayList<String> lines = new ArrayList<>();
@@ -169,6 +171,24 @@ public class UsnToJson {
         processFile(filename, compressionMethod, matcher.group(1), matcher.group(2), "UTF-8", writeToStdout);
     }
 
+    private static String sliceNextFromLine(StringBuilder rawMsg, Pattern initialFromLine) {
+        // if the last line of the StringBuilder is the next email's initial From line,
+        // slice it off and return it as String
+        int lastNewline = rawMsg.lastIndexOf("\n", rawMsg.length() - 2); // using rawMsg.length()-1 refers to the
+                                                                         // trailing newline
+        // if lastNewline is -1, when we add 1, it becomes 0
+        // so, no need to check or change here
+        String lastLine = rawMsg.substring(lastNewline + 1, rawMsg.length());
+
+        Matcher matcher = initialFromLine.matcher(lastLine);
+        if (matcher.matches()) {
+            rawMsg.delete(lastNewline + 1, rawMsg.length());
+            return lastLine;
+        }
+
+        return null;
+    }
+
     public static void processFile(String filename, String compression, String year, String month, String encoding,
             boolean writeToStdout) {
         if (filename == null || filename.length() < 1) {
@@ -207,18 +227,34 @@ public class UsnToJson {
 
             Pattern messageIdLine = Pattern.compile("^Message-ID:\\s+(<[\\w.@]+>)\\s*$");
 
-            // There are multiple formats for Subject: line
-            // Some don't even have the USN code, we ignore those
-            // Pattern subjectLine =
-            // Pattern.compile("^Subject:\\s+\\[(USN-[^]]+)]\\s+(.+)\\s+\\w+\\s*$");
-            Pattern subjectLine = Pattern.compile("^Subject:\\s+\\[(USN-[^]]+)].*$");
-            // 2021-March.txt:Subject: [USN-4883-1] Linux kernel vulnerabilities
-            // 2021-March.txt:Subject: [USN-4884-1] Linux kernel (OEM) vulnerabilities
-            // 2021-March.txt:Subject: [USN-4885-1] Pygments vulnerability
+            // There are multiple formats for the Subject line, so we don't
+            // extract the project name -- rather, we strip away the other data
+            // until we get the project name (or don't, which is also valid)
+            Pattern subjectLine = Pattern.compile("^Subject:\\s+.*(USN-\\d+-\\d+)\\D.+$");
+            Pattern subjectEndLine = Pattern.compile("^\\S+:\\s+.*$");
+            Pattern subjectRejectMultiBrackets = Pattern.compile("^Subject:\\s+.*\\[.*\\].*\\[.*\\].*$");
+            Pattern subjectImmediateUsn = Pattern.compile("^(USN-\\d+-\\d+)\\D.+$");
 
+            // add the trailing space, so we won't accidentally match the project name
+            ArrayList<String> wordsBeforeProjectName = new ArrayList<String>();
+            wordsBeforeProjectName.add(": "); // if we only match ":", perl modules will be mangled...
+            wordsBeforeProjectName.add("]");
+            wordsBeforeProjectName.add("Fixed ");
+            wordsBeforeProjectName.add("Updated ");
 
-
-
+            // hope no project name matches these keywords
+            ArrayList<String> wordsAfterProjectName = new ArrayList<String>();
+            wordsAfterProjectName.add(" Vulnerab");
+            wordsAfterProjectName.add(" vulnerab");
+            wordsAfterProjectName.add(" Regress");
+            wordsAfterProjectName.add(" regress");
+            wordsAfterProjectName.add(" updat");
+            wordsAfterProjectName.add(" bug");
+            wordsAfterProjectName.add(" packag");
+            wordsAfterProjectName.add(" for");
+            wordsAfterProjectName.add(" inform");
+            wordsAfterProjectName.add(" Denial");
+            wordsAfterProjectName.add(" (");
 
             Pattern dateLine = Pattern.compile("^Date:\\s+(\\S.*\\S)\\s*$");
 
@@ -235,6 +271,7 @@ public class UsnToJson {
             // Notice\\s*((\\s*)|(USN-\\d+-\\d+\\s+.*\\d{4}))\\s*$");
             Pattern ubuntuSecurityNoticeLine = Pattern
                     .compile("^Ubuntu Security Notice USN-\\d+-\\d+(|\\s+.*\\d{4})\\s*$");
+            Pattern startsWithTwoSpaces = Pattern.compile("^ {2}.+$");
 
             Pattern updateInstructionsLine = Pattern.compile("^Update instructions:\\s*$");
             Pattern theProblemLine = Pattern
@@ -263,8 +300,13 @@ public class UsnToJson {
                 // end of stream, print if we have some valid data
                 if (inputLine == null) {
                     if (firstUsnFound) {
+                        String tmpInitialFromLine = sliceNextFromLine(raw, initialFromLine);
+                        // System.out.println("Next: " + tmpFirstFromLine);
                         printToFile(usn, raw, year, month, writeToStdout);
                         raw = new StringBuilder();
+                        if (tmpInitialFromLine instanceof String && tmpInitialFromLine.length() > 0) {
+                            raw.append(tmpInitialFromLine);
+                        }
                     }
                     break;
                 }
@@ -273,9 +315,15 @@ public class UsnToJson {
                 // there might be leading garbage before the first from: line, don't print it
                 Matcher matcher = initialFromLine.matcher(inputLine);
                 if (matcher.matches()) {
+                    // System.out.println(matcher.group(0));
                     if (firstUsnFound) {
+                        String tmpInitialFromLine = sliceNextFromLine(raw, initialFromLine);
+                        // System.out.println("Next: " + tmpFirstFromLine);
                         printToFile(usn, raw, year, month, writeToStdout);
                         raw = new StringBuilder();
+                        if (tmpInitialFromLine instanceof String && tmpInitialFromLine.length() > 0) {
+                            raw.append(tmpInitialFromLine);
+                        }
                     } else {
                         firstUsnFound = true;
                         usn = new LinkedHashMap<>();
@@ -286,6 +334,7 @@ public class UsnToJson {
                 // Message-ID: <20210104135457.GA3338405@d4rkl41n>
                 matcher = messageIdLine.matcher(inputLine);
                 if (matcher.matches()) {
+                    // System.out.println(matcher.group(0));
                     usn.put("message-id", matcher.group(1));
                     continue;
                 }
@@ -293,14 +342,85 @@ public class UsnToJson {
                 // Subject: [USN-4673-1] libproxy vulnerability
                 matcher = subjectLine.matcher(inputLine);
                 if (matcher.matches()) {
-                    usn.put("id", matcher.group(1));
-                    usn.put("project", matcher.group(2));
+                    // System.out.println(matcher.group(0));
+
+                    // reject
+                    Matcher r = subjectRejectMultiBrackets.matcher(inputLine);
+                    if (r.matches()) {
+                        usn.remove("id"); // remove parsed id to prevent printing/writing
+                        // System.out.println("Reject: " + matcher.group(0));
+                        readNextInputLine = false;
+                        // skip to the next initial From line
+                        while ((inputLine = readNextLine(raw, bufferedReader)) != null) {
+                            Matcher m = initialFromLine.matcher(inputLine);
+                            if (m.matches()) {
+                                break;
+                            }
+                        }
+                        continue;
+                    }
+
+                    // there exists a USN string, but we should only extract the first one
+                    while (true) {
+                        String tmpSubjectUsn = inputLine.substring(inputLine.indexOf("USN-"));
+                        Matcher u = subjectImmediateUsn.matcher(tmpSubjectUsn);
+                        if (u.matches()) {
+                            usn.put("id", u.group(1));
+                            break;
+                        }
+                    }
+
+                    int tmpIdStart = matcher.start(1);
+                    int tmpIdLength = matcher.group(1).length();
+                    StringBuilder tmpSubject = new StringBuilder(inputLine.substring(tmpIdStart + tmpIdLength).trim());
+                    // join multiple subject lines
+                    while ((inputLine = readNextLine(raw, bufferedReader)) != null) {
+                        readNextInputLine = false;
+
+                        if (!inputLine.startsWith("\t")) {
+                            break;
+                        }
+
+                        Matcher m = subjectEndLine.matcher(inputLine);
+                        if (m.matches()) {
+                            break;
+                        }
+
+                        tmpSubject.append(" ").append(inputLine.trim());
+                    }
+
+                    // System.out.println("1: " + tmpSubject);
+                    // strip off "Fixed" and "Updated" before project name
+                    for (String wordBefore : wordsBeforeProjectName) {
+                        int tmpPosWordBefore = tmpSubject.indexOf(wordBefore);
+                        // System.out.printf("%s %d\n", wordBefore.toString(), tmpPosWordBefore);
+                        if (tmpPosWordBefore > -1) {
+                            int tmpPosAfterWordBefore = tmpSubject.indexOf(" ", tmpPosWordBefore);
+                            if (tmpPosAfterWordBefore > -1) {
+                                tmpSubject.delete(0, tmpPosAfterWordBefore);
+                            }
+                        }
+                    }
+                    // System.out.println("2: " + tmpSubject);
+
+                    // strip off "vuln", "regress", ... etc after project name
+                    for (String wordAfter : wordsAfterProjectName) {
+                        int tmpPosWordAfter = tmpSubject.indexOf(wordAfter);
+                        if (tmpPosWordAfter > -1) {
+                            tmpSubject.delete(tmpPosWordAfter, tmpSubject.length());
+                        }
+                    }
+                    // System.out.println("3: " + tmpSubject);
+
+                    usn.put("project", tmpSubject.toString().trim());
+
                     continue;
                 }
 
                 // Date: Mon, 4 Jan 2021 10:54:57 -0300
                 matcher = dateLine.matcher(inputLine);
                 if (matcher.matches()) {
+                    // System.out.println(matcher.group(0));
                     usn.put("date", matcher.group(1));
                     continue;
                 }
@@ -313,20 +433,17 @@ public class UsnToJson {
                 // Software Description:
                 matcher = summaryLine.matcher(inputLine);
                 if (matcher.matches()) {
+                    // System.out.println(matcher.group(0));
                     // skip over the empty lines after the section label
                     // stop when we find the next non-empty line
-                    do {
-                        inputLine = readNextLine(raw, bufferedReader);
-                        if (inputLine == null) {
-                            break;
-                        }
-                        inputLine = inputLine.trim();
-                    } while (inputLine.length() < 1);
+                    while ((inputLine = readNextLine(raw, bufferedReader)) != null && inputLine.trim().length() < 1) {
+                        ;
+                    }
 
                     // summary is the first non-empty lines after the section label
                     // stop when we find the next empty line
-                    StringBuilder tmpDescription = new StringBuilder(inputLine != null ? inputLine : "");
-                    while ((inputLine = readNextLine(raw, bufferedReader)) != null && inputLine.length() > 0) {
+                    StringBuilder tmpDescription = new StringBuilder(inputLine != null ? inputLine.trim() : "");
+                    while ((inputLine = readNextLine(raw, bufferedReader)) != null && inputLine.trim().length() > 0) {
                         tmpDescription.append(" ").append(inputLine.trim());
                     }
 
@@ -346,20 +463,33 @@ public class UsnToJson {
                 // A non-text attachment was scrubbed...
                 matcher = referencesLine.matcher(inputLine);
                 if (matcher.matches()) {
+                    // System.out.println(matcher.group(0));
                     // read all lines beginning with two spaces
                     // stop when the line does not begin with two spaces
-                    StringBuilder tempCveStr = new StringBuilder();
+                    StringBuilder tmpCveStr = new StringBuilder();
+
+                    // inputLine = readNextLine(raw, bufferedReader);
+                    // System.out.println(inputLine);
+                    // System.out.println("startsWith 2 spaces: " + startsWithTwoSpaces.matcher(inputLine).matches());
+                    // while (inputLine != null && startsWithTwoSpaces.matcher(inputLine).matches()) {
+                    // while ((inputLine = readNextLine(raw, bufferedReader)) != null && startsWithTwoSpaces.matcher(inputLine).matches()) {
                     while ((inputLine = readNextLine(raw, bufferedReader)) != null && inputLine.startsWith("  ")) {
+                        // System.out.println(inputLine);
                         // some lines beginning with two spaces are not CVEs
                         // we only want the CVEs
                         if (cveLine.matcher(inputLine).matches()) {
-                            tempCveStr.append(" ").append(inputLine.trim());
+                            tmpCveStr.append(" ").append(inputLine.trim());
                         }
+                        // inputLine = readNextLine(raw, bufferedReader);
+                        // System.out.println(inputLine);
+                        // System.out.println("startsWith 2 spaces: " + startsWithTwoSpaces.matcher(inputLine).matches());
                     }
 
+                    // System.out.println(tmpCveStr);
                     // Note: in 2011-April, some CVE's are not separated by a comma
                     ArrayList<String> tmpCveList = new ArrayList<>(
-                            Arrays.asList(tempCveStr.toString().trim().split("\\s*(,|\\s)\\s*")));
+                            Arrays.asList(tmpCveStr.toString().trim().split("\\s*(,|\\s)\\s*")));
+                    // System.out.println(tmpCveList.toString());
                     usn.put("cves", tmpCveList);
 
                     // the next line has already been read
@@ -388,6 +518,7 @@ public class UsnToJson {
                     matcher = ubuntuSecurityNoticeLine.matcher(inputLine);
                 }
                 if (matcher.matches()) {
+                    // System.out.println(matcher.group(0));
                     // look for the section end marker
                     // System.out.println("MASUK " + inputLine);
                     StringBuilder tempCveStr = new StringBuilder();
@@ -448,6 +579,7 @@ public class UsnToJson {
                     matcher = theProblemLine.matcher(inputLine);
                 }
                 if (matcher.matches()) {
+                    // System.out.println(matcher.group(0));
                     // skip lines after the section header, until we find a Ubuntu version line
                     // or we find an empty line
                     while ((inputLine = readNextLine(raw, bufferedReader)) != null) {
@@ -462,14 +594,13 @@ public class UsnToJson {
                     ArrayList<LinkedHashMap<String, String>> tmpSafeVersionList = new ArrayList<>();
                     String ubuntuVersion = "";
                     while (inputLine != null) {
-                        Matcher m;
                         // - we can get a new ubuntu version line multiple times
                         // - when we find a safe package version line, associate it with the preceding
                         // ..ubuntu version
                         // - ignore empty lines
                         // - as soon as we find a non-empty line that does not match a ubuntu version
                         // ..line or a safe package version line, we know that the section has ended
-                        m = ubuntuVersionLine.matcher(inputLine);
+                        Matcher m = ubuntuVersionLine.matcher(inputLine);
                         if (m.matches()) {
                             ubuntuVersion = m.group(1);
                         } else {
@@ -513,6 +644,9 @@ public class UsnToJson {
     private static String readNextLine(StringBuilder buf, BufferedReader br) throws IOException {
         String line = br.readLine();
         if (line != null) {
+            // convert all Unicode non-breaking spaces into spaces
+            // this also converts tabs into single spaces
+            line = line.replaceAll("\\p{javaSpaceChar}", " ");
             // line is trimmed before being stored in the buffer
             // should we preserve the leading spaces and use stripTrailing() instead?
             buf.append(line.trim()).append('\n');

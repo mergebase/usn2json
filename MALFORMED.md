@@ -4,7 +4,13 @@
 
 Because of these, when matching the subject line:
 - match subject line solely by looking at the starting `Subject: ` part and USN code inside it
-- join the following lines, until we see a line that starts with `Something:`
+- join the following lines, until
+	- we see a line that doesn't start with a tab, or
+	- we see a line that starts with `Something:`
+
+Ignore the email if:
+- there is more than one pair square brackets, see for example `USN-3199-2`
+- there is no USN code in the subject line (this kind of subject line won't be matched anyway in the first place)
 
 Then parse the USN code:
 - without looking for square brackets
@@ -12,12 +18,12 @@ Then parse the USN code:
 Then parse the package name(s):
 - strip off everything up to the USN code
 - strip off everything up to `Fixed`, `Updated`
-- strip off everything starting with `Vuln`, `vuln`, `Regress`, `regress`, `updat`, `bug`, `packag`, `for`, `inform`, `Denial`
+- strip off everything starting with `Vulnerab`, `vulnerab`, `Regress`, `regress`, `updat`, `bug`, `packag`, `for`, `inform`, `Denial`
 - strip off everything starting with `(`
 - the package name(s) is/are the remaining string
 - an empty package name is acceptable
 
-Note: these have not been accounted for
+Note: these have not been accounted for, so the words after the closing square bracket will become the "project name"
 
 ```txt
 2005-September.txt:
@@ -25,22 +31,23 @@ Subject: [USN-179-1] openssl weak default configuration
 
 2006-March.txt:
 Subject: [USN-262-1] Ubuntu 5.10 installer password disclosure
-
-2010-July.txt:
-Subject: [USN-930-5] ant, apturl, Epiphany, gluezilla, gnome-python-extras,
-	liferea, mozvoikko, OpenJDK, packagekit, ubufox, webfav, yelp update
-
-2010-June.txt:
-Subject: [USN-930-2] apturl, Epiphany, gecko-sharp, gnome-python-extras,
-	liferea, rhythmbox, totem, ubufox, yelp update
 ```
 
 ### USN-160-2 (2005-September)
 
-No brackets surrounding USN code
+No brackets surrounding USN code, and there is an extra `:` after the USN code
 
 ```txt
 Subject: USN-160-2: Apache vulnerability
+```
+
+### USN-186-2 (2005-September)
+
+USN code appears twice
+
+```txt
+Subject: [USN-186-2] Ubuntu 4.10 packages for USN-186-1 Firefox security
+	update
 ```
 
 ### USN-346-2 (2006-September)
@@ -53,12 +60,13 @@ Subject: [USN-346-2] Fixed linux-restricted-modules-2.6.15 for previous Linux
 Message-ID: <20060914194632.GE4954@piware.de>
 ```
 
-### USN-2929-2 (2016 March)
+### USN-930-2 (2010-June)
 
-No keyword after the package name
+Subject line spanning multiple lines and multiple projects in the subject line
 
 ```txt
-Subject: [RT.PS #1359219] [USN-2929-2] Linux kernel (Trusty HWE)
+Subject: [USN-930-2] apturl, Epiphany, gecko-sharp, gnome-python-extras,
+	liferea, rhythmbox, totem, ubufox, yelp update
 ```
 
 ### USN-1093-1 (2011-March)
@@ -69,17 +77,9 @@ This is not an isolated example
 Subject: [USN-1093-1] Linux Kernel vulnerabilities (Marvell Dove)
 ```
 
-### USN-4518-1 (2020-September)
-
-Missing opening bracket `[`
-
-```txt
-Subject: USN-4518-1] xawtv vulnerability
-```
-
 ### USN-3199-2 (2017-February)
 
-There is an additional bracket before the USN code
+There is an additional bracket before the USN code, **THESE EMAILS HAVE TO BE SKIPPED**
 
 ```txt
 Subject: [RT.PS #2107586] [USN-3199-2] Python Crypto regression
@@ -89,6 +89,22 @@ Subject: [RT.PS #2107586] [USN-3199-2] Python Crypto regression
 
 ```txt
 Subject: [USN-3207-2] Linux kernel (Trusty HWE) vulnerabilities
+```
+
+### USN-3326-1 (2017-June)
+
+No keyword after the package name
+
+```txt
+Subject: [USN-3326-1] Linux kernel
+```
+
+### USN-4518-1 (2020-September)
+
+Missing opening bracket `[`
+
+```txt
+Subject: USN-4518-1] xawtv vulnerability
 ```
 
 ## Malformed special section
@@ -126,4 +142,21 @@ tomcat8 vulnerabilities
 ==========================================================================
 ```
 
+## Malformed References section
 
+### USN-3199-2 (2017-September)
+
+The lines in the `References:` section seems to start with two spaces, but in reality it contains a non-breaking space (U+00A0, 0xC2 0xA0 in UTF-8).
+
+To humans reading the text, this character looks exactly like a space character (0x20), but it's really not, and the regular Java functions like `trim()` and `startsWith()` will produce the wrong output. Even regexes using the `\s` character class will not match this character.
+
+The solution is to replace all whitespace characters, including the Unicode non-breaking space, with a single space character. This is done inside the `readNextLine()` function, so that the replacement is applied to all input lines. The downside of this approach is that, tabs are replaced with a single space character -- but text formatting is not our main concern right now.
+
+```txt
+References:
+  http://www.ubuntu.com/usn/usn-3199-2
+  http://www.ubuntu.com/usn/usn-3199-1
+  CVE-2013-7459
+```
+
+Note: To be safe, we use this pattern matching method also for the safe versions list.

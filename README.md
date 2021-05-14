@@ -13,7 +13,7 @@ This is the very beginning of the mailing list. These data can be readily parsed
 - `date`
 - `project`
 
-These data can be parsed, with some caveats:
+These data can be parsed, with some caveats as described below:
 - `cves`
 - `safeVersions`
 
