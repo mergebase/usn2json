@@ -17,7 +17,6 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.regex.Matcher;
@@ -89,22 +88,17 @@ public class UsnToJson {
         orderedUsn.put("project", usn.getOrDefault("project", ""));
         orderedUsn.put("description", usn.getOrDefault("description", ""));
         orderedUsn.put("cves", usn.getOrDefault("cves", new ArrayList<>()));
-        orderedUsn.put("safeVersions", usn.getOrDefault("safeVersions", new HashMap<String, String>()));
+        orderedUsn.put("safeVersions",
+                usn.getOrDefault("safeVersions", new ArrayList<LinkedHashMap<String, String>>()));
 
         return orderedUsn;
     }
 
     private static void printToFile(LinkedHashMap<String, Object> usn, StringBuilder rawMsg, String year, String month,
             boolean writeToStdOut) {
-        // remove the "id" key after printing, otherwise if we fail to parse the next
-        // email, the output file may be overwritten
-        // this is evident in USN-1093-1, where the Subject: line is not parsed
-        // correctly
-
         usn = reorder(usn, rawMsg);
         if (writeToStdOut) {
             printToStdout(usn, rawMsg);
-            usn.remove("id");
             return;
         }
 
@@ -130,8 +124,6 @@ public class UsnToJson {
                 printWriter.close();
             }
         }
-
-        usn.remove("id");
     }
 
     private static void printToStdout(LinkedHashMap<String, Object> usn, StringBuilder rawMsg) {
@@ -225,12 +217,14 @@ public class UsnToJson {
             Pattern initialFromLine = Pattern.compile(
                     "^From\\s+\\S+\\s+at\\s+\\S+\\s+\\w{3}\\s+\\w{3}\\s+\\d{1,2}\\s+\\d{2}:\\d{2}:\\d{2}\\s+\\d{4}\\s*$");
 
-            Pattern messageIdLine = Pattern.compile("^Message-ID:\\s+(<[\\w.@]+>)\\s*$");
+            // Message-ID does not conform to email addresses
+            Pattern messageIdLine = Pattern.compile("^Message-ID:\\s+(<[\\w-/.@]+>)\\s*$");
 
             // There are multiple formats for the Subject line, so we don't
             // extract the project name -- rather, we strip away the other data
             // until we get the project name (or don't, which is also valid)
-            Pattern subjectLine = Pattern.compile("^Subject:\\s+.*(USN-\\d+-\\d+)\\D.+$");
+            Pattern subjectLineOnly = Pattern.compile("^Subject:\\s+.+$");
+            Pattern subjectLineUSN = Pattern.compile("^Subject:\\s+.*(USN-\\d+-\\d+)\\D.+$");
             Pattern subjectEndLine = Pattern.compile("^\\S+:\\s+.*$");
             Pattern subjectRejectMultiBrackets = Pattern.compile("^Subject:\\s+.*\\[.*\\].*\\[.*\\].*$");
             Pattern subjectImmediateUsn = Pattern.compile("^(USN-\\d+-\\d+)\\D.+$");
@@ -261,7 +255,8 @@ public class UsnToJson {
             Pattern summaryLine = Pattern.compile("^Summary:\\s*$");
 
             Pattern referencesLine = Pattern.compile("^References:\\s*$");
-            Pattern cveLine = Pattern.compile("^ {2}CVE-\\d{4}-\\d{4,7}.*$");
+            Pattern referencesLineWithTrailingGarbage = Pattern.compile("^References:\\S*\\s*$");
+            Pattern cveLine = Pattern.compile("^\\s*CVE-\\d{4}-\\d{4,7}.*$");
             // this ASCII bar is used for the special section after Message-ID:
             // before 2011-May, this section contains the CVE lines
             // some of these have trailing spaces, some may be longer than 59 chars
@@ -271,20 +266,48 @@ public class UsnToJson {
             // Notice\\s*((\\s*)|(USN-\\d+-\\d+\\s+.*\\d{4}))\\s*$");
             Pattern ubuntuSecurityNoticeLine = Pattern
                     .compile("^Ubuntu Security Notice USN-\\d+-\\d+(|\\s+.*\\d{4})\\s*$");
-            Pattern startsWithTwoSpaces = Pattern.compile("^ {2}.+$");
+            // Pattern startsWithTwoSpaces = Pattern.compile("^ {2}.+$");
 
             Pattern updateInstructionsLine = Pattern.compile("^Update instructions:\\s*$");
             Pattern theProblemLine = Pattern
                     .compile("^The problem can be corrected by (installing|updating|upgrading) .*");
             // I have seen only LTS and ESM tags after the version number
-            Pattern ubuntuVersionLine = Pattern.compile("^Ubuntu\\s+(\\S.*\\S)(\\s+(LTS|ESM))?:\\s*$");
-            Pattern safePackageVersionLine = Pattern.compile("^ {2}(\\S+)\\s+(\\S+)\\s*$");
+            Pattern ubuntuVersionLine = Pattern.compile("^Ubuntu\\s+([\\d\\.]+)(\\s+(LTS|ESM))?:\\s*$");
+            Pattern safePackageVersionLine = Pattern.compile("^\\s*(\\S+)\\s+(\\S+)\\s*$");
+            Pattern safePackageOnlyLine = Pattern.compile("^\\s*(\\S+)\\s*$");
+            Pattern safeVersionOnlyLine = Pattern.compile("^\\s*(\\S+)\\s*$");
+            Pattern genericSectionHeaderLine = Pattern.compile("[A-Z][\\w\\s-]+:\\s*$");
+            Pattern attachmentStartLine = Pattern.compile("^-------------- next part --------------\\s*$");
+
+            // These patterns only match older (pre-2006-June) emails with
+            // the safe versions list inside the paragraph
+            Pattern affectedUbuntuReleasesLine = Pattern
+                    .compile("^A security issue affects the following Ubuntu releases:$");
+            Pattern affectedUbuntuReleasesMatcher = Pattern.compile("^Ubuntu\\s+(\\S+)(\\s*|\\s+.*)$");
+            Pattern affectedPackagesLine = Pattern.compile("^The following packages are affected:$");
+            Pattern theProblemParagraphStartingLine = Pattern
+                    .compile("^The problem can be corrected by upgrading the affected package(|s|\\(s\\)) to.*$");
+            Pattern safeVersionWithUbuntuVersionInsideBrackets = Pattern
+                    .compile("^\\s*(\\S+)\\s+\\(for Ubuntu ([\\d\\.]+)\\)\\s*$");
+            Pattern safeVersionWithPackageNameInsideBrackets = Pattern
+                    .compile("^\\s*(\\S+)\\s+\\(\\s*([^\\)]*)\\s*\\)\\s*$");
+            Pattern safeVersionWithInfoInsideBrackets = Pattern
+                    .compile("^\\s*(\\S+)\\s+\\(\\s*([^\\)]*)\\s*\\)\\s*$");
+            Pattern onUbuntuLine = Pattern.compile("^On Ubuntu ([\\d\\.]+).*, the problem can be corrected by.*$");
+
+            // special pattern for USN-612-2
+            Pattern updatingYourSystemLine = Pattern.compile("^Updating your system:\\s*$");
+            Pattern ubuntuVersionIndent3Line = Pattern.compile("^ {3}Ubuntu\\s+([\\d\\.]+)(\\s+(LTS|ESM))?:\\s*$");
+            Pattern safePackageVersionIndent5Line = Pattern.compile("^ {5}(\\S+)\\s+(\\S+)\\s*$");
 
             String inputLine;
 
             boolean firstUsnFound = false;
             LinkedHashMap<String, Object> usn = new LinkedHashMap<>();
             StringBuilder raw = new StringBuilder();
+
+            ArrayList<String> oldVersionUbuntuReleasesList = new ArrayList<String>();
+            ArrayList<String> oldVersionPackagesAffectedList = new ArrayList<String>();
 
             inputLine = readNextLine(raw, bufferedReader);
             boolean readNextInputLine = false;
@@ -300,13 +323,9 @@ public class UsnToJson {
                 // end of stream, print if we have some valid data
                 if (inputLine == null) {
                     if (firstUsnFound) {
-                        String tmpInitialFromLine = sliceNextFromLine(raw, initialFromLine);
                         // System.out.println("Next: " + tmpFirstFromLine);
                         printToFile(usn, raw, year, month, writeToStdout);
-                        raw = new StringBuilder();
-                        if (tmpInitialFromLine instanceof String && tmpInitialFromLine.length() > 0) {
-                            raw.append(tmpInitialFromLine);
-                        }
+                        // System.out.println("after printing 1, id: " + usn.get("id"));
                     }
                     break;
                 }
@@ -316,18 +335,28 @@ public class UsnToJson {
                 Matcher matcher = initialFromLine.matcher(inputLine);
                 if (matcher.matches()) {
                     // System.out.println(matcher.group(0));
+                    // extract the next initial From line
+                    String tmpInitialFromLine = sliceNextFromLine(raw, initialFromLine);
+
                     if (firstUsnFound) {
-                        String tmpInitialFromLine = sliceNextFromLine(raw, initialFromLine);
                         // System.out.println("Next: " + tmpFirstFromLine);
                         printToFile(usn, raw, year, month, writeToStdout);
-                        raw = new StringBuilder();
-                        if (tmpInitialFromLine instanceof String && tmpInitialFromLine.length() > 0) {
-                            raw.append(tmpInitialFromLine);
-                        }
+                        // System.out.println("after printing 2, id: " + usn.get("id"));
                     } else {
                         firstUsnFound = true;
-                        usn = new LinkedHashMap<>();
                     }
+
+                    // re-initialize data structures every time
+                    usn = new LinkedHashMap<>();
+                    oldVersionUbuntuReleasesList = new ArrayList<String>();
+                    oldVersionPackagesAffectedList = new ArrayList<String>();
+
+                    // restore the next initial From line for the next USN
+                    raw = new StringBuilder();
+                    if (tmpInitialFromLine instanceof String && tmpInitialFromLine.length() > 0) {
+                        raw.append(tmpInitialFromLine);
+                    }
+
                     continue;
                 }
 
@@ -340,11 +369,27 @@ public class UsnToJson {
                 }
 
                 // Subject: [USN-4673-1] libproxy vulnerability
-                matcher = subjectLine.matcher(inputLine);
+                matcher = subjectLineOnly.matcher(inputLine);
                 if (matcher.matches()) {
                     // System.out.println(matcher.group(0));
 
-                    // reject
+                    // reject email if subject line does not have parseable USN
+                    matcher = subjectLineUSN.matcher(inputLine);
+                    if (!matcher.matches()) {
+                        usn.remove("id"); // remove parsed id to prevent printing/writing
+                        // System.out.println("Reject: " + matcher.group(0));
+                        readNextInputLine = false;
+                        // skip to the next initial From line
+                        while ((inputLine = readNextLine(raw, bufferedReader)) != null) {
+                            Matcher m = initialFromLine.matcher(inputLine);
+                            if (m.matches()) {
+                                break;
+                            }
+                        }
+                        continue;
+                    }
+
+                    // reject email if subject line has multiple square brackets
                     Matcher r = subjectRejectMultiBrackets.matcher(inputLine);
                     if (r.matches()) {
                         usn.remove("id"); // remove parsed id to prevent printing/writing
@@ -462,6 +507,9 @@ public class UsnToJson {
                 // -------------- next part --------------
                 // A non-text attachment was scrubbed...
                 matcher = referencesLine.matcher(inputLine);
+                if (!matcher.matches()) {
+                    matcher = referencesLineWithTrailingGarbage.matcher(inputLine);
+                }
                 if (matcher.matches()) {
                     // System.out.println(matcher.group(0));
                     // read all lines beginning with two spaces
@@ -470,10 +518,22 @@ public class UsnToJson {
 
                     // inputLine = readNextLine(raw, bufferedReader);
                     // System.out.println(inputLine);
-                    // System.out.println("startsWith 2 spaces: " + startsWithTwoSpaces.matcher(inputLine).matches());
-                    // while (inputLine != null && startsWithTwoSpaces.matcher(inputLine).matches()) {
-                    // while ((inputLine = readNextLine(raw, bufferedReader)) != null && startsWithTwoSpaces.matcher(inputLine).matches()) {
-                    while ((inputLine = readNextLine(raw, bufferedReader)) != null && inputLine.startsWith("  ")) {
+                    // System.out.println("startsWith 2 spaces: " +
+                    // startsWithTwoSpaces.matcher(inputLine).matches());
+                    // while (inputLine != null && startsWithTwoSpaces.matcher(inputLine).matches())
+                    // {
+                    // while ((inputLine = readNextLine(raw, bufferedReader)) != null &&
+                    // startsWithTwoSpaces.matcher(inputLine).matches()) {
+                    while ((inputLine = readNextLine(raw, bufferedReader)) != null) {
+                        // System.out.println(inputLine);
+                        if (genericSectionHeaderLine.matcher(inputLine).matches()) {
+                            // System.out.println("matches generic section header");
+                            break;
+                        }
+                        if (attachmentStartLine.matcher(inputLine).matches()) {
+                            // System.out.println("matches attachment section start");
+                            break;
+                        }
                         // System.out.println(inputLine);
                         // some lines beginning with two spaces are not CVEs
                         // we only want the CVEs
@@ -482,13 +542,22 @@ public class UsnToJson {
                         }
                         // inputLine = readNextLine(raw, bufferedReader);
                         // System.out.println(inputLine);
-                        // System.out.println("startsWith 2 spaces: " + startsWithTwoSpaces.matcher(inputLine).matches());
+                        // System.out.println("startsWith 2 spaces: " +
+                        // startsWithTwoSpaces.matcher(inputLine).matches());
                     }
 
                     // System.out.println(tmpCveStr);
                     // Note: in 2011-April, some CVE's are not separated by a comma
-                    ArrayList<String> tmpCveList = new ArrayList<>(
-                            Arrays.asList(tmpCveStr.toString().trim().split("\\s*(,|\\s)\\s*")));
+                    // ArrayList<String> tmpCveList = new ArrayList<>(
+                    // Arrays.asList(tmpCveStr.toString().trim().split("\\s*(,|\\s)\\s*")));
+
+                    ArrayList<String> tmpCveList = new ArrayList<String>();
+                    for (String cveStr : tmpCveStr.toString().trim().split("\\s*(,|\\s)\\s*")) {
+                        if (cveStr.startsWith("CVE-")) {
+                            tmpCveList.add(cveStr);
+                        }
+                    }
+
                     // System.out.println(tmpCveList.toString());
                     usn.put("cves", tmpCveList);
 
@@ -549,6 +618,219 @@ public class UsnToJson {
                     continue;
                 }
 
+                matcher = affectedUbuntuReleasesLine.matcher(inputLine);
+                if (matcher.matches()) {
+                    // find the next non-empty line
+                    while ((inputLine = readNextLine(raw, bufferedReader)) != null && inputLine.trim().length() < 1) {
+                        ;
+                    }
+
+                    // parse until the next empty line
+                    do {
+                        // System.out.println(inputLine);
+                        Matcher m = affectedUbuntuReleasesMatcher.matcher(inputLine);
+                        if (m.matches()) {
+                            oldVersionUbuntuReleasesList.add(m.group(1));
+                        }
+                    } while ((inputLine = readNextLine(raw, bufferedReader)) != null && inputLine.trim().length() > 0);
+
+                    // System.out.println(oldVersionUbuntuReleasesList);
+                    readNextInputLine = false;
+
+                    continue;
+                }
+
+                matcher = affectedPackagesLine.matcher(inputLine);
+                if (matcher.matches()) {
+                    // find the next non-empty line
+                    while ((inputLine = readNextLine(raw, bufferedReader)) != null && inputLine.trim().length() < 1) {
+                        ;
+                    }
+
+                    // parse until the next empty line
+                    do {
+                        // System.out.println(inputLine);
+                        oldVersionPackagesAffectedList.add(inputLine);
+                    } while ((inputLine = readNextLine(raw, bufferedReader)) != null && inputLine.trim().length() > 0);
+
+                    // System.out.println(oldVersionPackagesAffectedList);
+                    readNextInputLine = false;
+
+                    continue;
+                }
+
+                // 2005 Special: "On Ubuntu ..."
+                // matcher = onUbuntuLine.matcher(inputLine);
+                // if (matcher.matches()) {
+                //     // we can extract the ubuntu version now
+                //     String ubuntuVersion = matcher.group(1);
+
+                // }
+
+                // must match this before the newer style below
+                matcher = theProblemParagraphStartingLine.matcher(inputLine);
+                if (!matcher.matches()) {
+                    matcher = onUbuntuLine.matcher(inputLine);
+                }
+                if (matcher.matches()) {
+                    // support two kinds of paragraphs
+                    // The problem can be ...
+                    // On Ubuntu XX.XX, ...
+                    ArrayList<String> ubuntuReleasesConcerningThisParagraph = new ArrayList<String>();
+                    if ((matcher = onUbuntuLine.matcher(inputLine)).matches()) {
+                        ubuntuReleasesConcerningThisParagraph.add(matcher.group(1));
+                    } else {
+                        ubuntuReleasesConcerningThisParagraph.addAll(oldVersionUbuntuReleasesList);
+                    }
+
+                    StringBuilder tmpProblemParagraph = new StringBuilder();
+                    // parse until the next empty line
+                    do {
+                        // System.out.println(inputLine);
+                        tmpProblemParagraph.append(" ").append(inputLine.trim());
+                    } while ((inputLine = readNextLine(raw, bufferedReader)) != null && inputLine.trim().length() > 0);
+
+                    // System.out.println(tmpProblemParagraph);
+
+                    if (tmpProblemParagraph.indexOf("version ") >= 0) {
+                        // delete everything up to "version" and after the sentence ends with a period
+                        tmpProblemParagraph = new StringBuilder(tmpProblemParagraph.toString()
+                                .replaceFirst("^.* version ", "").replaceFirst("([^\\.])\\.(| .*)$", "$1"));
+                        // System.out.println(tmpProblemParagraph);
+                        // System.out.println();
+
+                        ArrayList<String> tmpSafeVersions = new ArrayList<String>(
+                            Arrays.asList(
+                                tmpProblemParagraph
+                                    .toString()
+                                    // .replaceAll("\\(\\)", " AND ")
+                                    .replaceAll("\\),?\\s+((and|or)\\s+)?", ")\n")
+                                    // .replaceAll("\\),\\s+((and|or)\\s+)?", ")\n")
+                                    // .replaceAll("\\)[,]?\\s+(and|or)\\s+", ")\n")
+                                    .split("\n")));
+                        // System.out.println(tmpSafeVersions);
+                        // System.out.println();
+
+
+
+
+
+                        ArrayList<LinkedHashMap<String, String>> tmpSafeVersionList = new ArrayList<>();
+                        for (String safeVersion : tmpSafeVersions) {
+                            // System.out.println("safeVersion: " + safeVersion);
+                            Matcher m;
+                            // m = safeVersionWithUbuntuVersionInsideBrackets.matcher(safeVersion);
+                            // if (m.matches()) {
+                            //     for (String safePackage : oldVersionPackagesAffectedList) {
+                            //         LinkedHashMap<String, String> tmpSafeVersion = new LinkedHashMap<>();
+                            //         tmpSafeVersion.put("ubuntu", m.group(2));
+                            //         tmpSafeVersion.put("pkg", safePackage);
+                            //         tmpSafeVersion.put("v", m.group(1));
+                            //         tmpSafeVersionList.add(tmpSafeVersion);
+                            //     }
+                            //     continue;
+                            // }
+
+                            // m = safeVersionWithPackageNameInsideBrackets.matcher(safeVersion);
+                            // if (m.matches()) {
+                            //     for (String ubuntuVersion : oldVersionUbuntuReleasesList) {
+                            //         LinkedHashMap<String, String> tmpSafeVersion = new LinkedHashMap<>();
+                            //         tmpSafeVersion.put("ubuntu", ubuntuVersion);
+                            //         tmpSafeVersion.put("pkg", m.group(2));
+                            //         tmpSafeVersion.put("v", m.group(1));
+                            //         tmpSafeVersionList.add(tmpSafeVersion);
+                            //     }
+                            //     continue;
+                            // }
+
+                            m = safeVersionWithInfoInsideBrackets.matcher(safeVersion);
+                            if (m.matches()) {
+                                // oneSafeVersion is m.group(1)
+                                String oneSafeVersion = m.group(1);
+
+                                // info inside brackets is m.group(2)
+                                // can be x and y
+                                // can be x and y for z
+                                ArrayList<String> wordsInsideBrackets = new ArrayList<String>(Arrays.asList(m.group(2).replace(",", " ").split(" ")));
+                                // special case for USN-149-1
+                                if (m.group(2).endsWith("packages")) {
+                                    wordsInsideBrackets = new ArrayList<String>();
+                                    wordsInsideBrackets.add(m.group(2));
+                                }
+
+                                ArrayList<String> packageNameInsideBrackets = new ArrayList<String>();
+                                ArrayList<String> ubuntuVersionInsideBrackets = new ArrayList<String>();
+                                boolean lookingForUbuntuVersion = false;
+                                for (String word : wordsInsideBrackets) {
+                                    if (word.length() < 1 || word.equals("or") || word.equals("and") || word.equals("Ubuntu")) {
+                                        continue;
+                                    }
+                                    if (word.equals("for")) {
+                                        lookingForUbuntuVersion = true;
+                                        continue;
+                                    }
+                                    if (word.equals("on")) {
+                                        break;
+                                    }
+                                    if (!lookingForUbuntuVersion) {
+                                        packageNameInsideBrackets.add(word);
+                                    } else {
+                                        ubuntuVersionInsideBrackets.add(word);
+                                    }
+                                }
+                                if (packageNameInsideBrackets.size() < 1) {
+                                    packageNameInsideBrackets.addAll(oldVersionPackagesAffectedList);
+                                }
+                                if (ubuntuVersionInsideBrackets.size() < 1) {
+                                    ubuntuVersionInsideBrackets.addAll(ubuntuReleasesConcerningThisParagraph);
+                                }
+
+                                // System.out.println(oneSafeVersion);
+                                // System.out.println(packageNameInsideBrackets);
+                                // System.out.println(ubuntuVersionInsideBrackets);
+                                // System.out.println();
+                                for (String ubuntuVersion : ubuntuVersionInsideBrackets) {
+                                    for (String safePackage : packageNameInsideBrackets) {
+                                        LinkedHashMap<String, String> tmpSafeVersion = new LinkedHashMap<>();
+                                        tmpSafeVersion.put("ubuntu", ubuntuVersion);
+                                        tmpSafeVersion.put("pkg", safePackage);
+                                        tmpSafeVersion.put("v", oneSafeVersion.trim());
+                                        tmpSafeVersionList.add(tmpSafeVersion);
+                                    }
+                                }
+
+                                continue;
+                            }
+
+
+                            // version only, no brackets
+                            if (safeVersion.trim().length() > 0) {
+                                // System.out.println("version only: " + safeVersion);
+                                for (String ubuntuVersion : ubuntuReleasesConcerningThisParagraph) {
+                                    for (String safePackage : oldVersionPackagesAffectedList) {
+                                        LinkedHashMap<String, String> tmpSafeVersion = new LinkedHashMap<>();
+                                        tmpSafeVersion.put("ubuntu", ubuntuVersion);
+                                        tmpSafeVersion.put("pkg", safePackage);
+                                        tmpSafeVersion.put("v", safeVersion.trim());
+                                        tmpSafeVersionList.add(tmpSafeVersion);
+                                    }
+                                }
+                                continue;
+                            }
+                        }
+
+                        // System.out.println(tmpSafeVersionList);
+                        usn.put("safeVersions", tmpSafeVersionList);
+                        continue;
+                    } else {
+                        inputLine = tmpProblemParagraph.toString().trim();
+                        readNextInputLine = false;
+                        // System.out.println(inputLine);
+                        // no continue keyword here, the execution just falls through
+                        // and it should match the next condition
+                    }
+                }
+
                 // Note: for USN's older than 2011-May, the Update instructions: line
                 // may be missing
 
@@ -574,21 +856,60 @@ public class UsnToJson {
                 // References:
                 // ..https://usn.ubuntu.com/4673-1
                 // ..CVE-2020-26154
+
+                // System.out.println(inputLine);
                 matcher = updateInstructionsLine.matcher(inputLine);
                 if (!matcher.matches()) {
                     matcher = theProblemLine.matcher(inputLine);
                 }
                 if (matcher.matches()) {
-                    // System.out.println(matcher.group(0));
-                    // skip lines after the section header, until we find a Ubuntu version line
-                    // or we find an empty line
-                    while ((inputLine = readNextLine(raw, bufferedReader)) != null) {
-                        if (ubuntuVersionLine.matcher(inputLine).matches()) {
+                    // System.out.println("matching");
+                    // System.out.println("update instructions: " + matcher.group(0));
+
+                    if (updateInstructionsLine.matcher(inputLine).matches()) {
+                        // find the next non-blank line
+                        while ((inputLine = readNextLine(raw, bufferedReader)) != null
+                                && inputLine.trim().length() < 1) {
+                            ;
+                        }
+                    }
+
+                    if (theProblemLine.matcher(inputLine).matches()) {
+                        // skip the whole paragraph (find a blank line)
+                        // or find the Ubuntu version line
+                        while ((inputLine = readNextLine(raw, bufferedReader)) != null) {
+                            // System.out.println(inputLine);
+                            if (inputLine.trim().length() < 1) {
+                                break;
+                            }
+                            if (ubuntuVersionLine.matcher(inputLine).matches()) {
+                                break;
+                            }
+                        }
+                    }
+
+                    // System.out.println("matching: " + inputLine);
+                    // if empty, skip
+                    // if ubuntu, break loop (we found it)
+                    // otherwise section has ended, break loop anyway
+                    if (!ubuntuVersionLine.matcher(inputLine).matches()) {
+                        while ((inputLine = readNextLine(raw, bufferedReader)) != null) {
+                            // System.out.println(usn.get("id") + " " + inputLine);
+                            if (inputLine.trim().length() < 1) {
+                                continue;
+                            }
+                            if (ubuntuVersionLine.matcher(inputLine).matches()) {
+                                break;
+                            }
+
                             break;
                         }
-                        if (inputLine.trim().length() < 1) {
-                            break;
-                        }
+                    }
+
+                    // System.out.println("after looking for first ubuntu version: " + inputLine);
+                    if (!ubuntuVersionLine.matcher(inputLine).matches()) {
+                        readNextInputLine = false;
+                        continue;
                     }
 
                     ArrayList<LinkedHashMap<String, String>> tmpSafeVersionList = new ArrayList<>();
@@ -603,8 +924,108 @@ public class UsnToJson {
                         Matcher m = ubuntuVersionLine.matcher(inputLine);
                         if (m.matches()) {
                             ubuntuVersion = m.group(1);
+                            inputLine = readNextLine(raw, bufferedReader);
+                            continue;
+                        }
+                        if (ubuntuVersion.length() < 1 && !m.matches()) {
+                            // previous line was empty line, or we just started,
+                            // and this is not a Ubuntu version line
+                            break;
+                        }
+
+                        m = genericSectionHeaderLine.matcher(inputLine);
+                        if (m.matches()) {
+                            break;
+                        }
+
+                        m = safePackageVersionLine.matcher(inputLine);
+                        if (m.matches()) {
+                            // System.out.println("got package version: " + inputLine);
+                            LinkedHashMap<String, String> tmpSafeVersion = new LinkedHashMap<>();
+
+                            tmpSafeVersion.put("ubuntu", ubuntuVersion);
+                            if (m.group(1).endsWith(":") && m.group(1).charAt(m.group(1).length() - 2) != ':') {
+                                tmpSafeVersion.put("pkg", m.group(1).substring(0, m.group(1).length() - 1));
+                            } else {
+                                tmpSafeVersion.put("pkg", m.group(1));
+                            }
+                            tmpSafeVersion.put("v", m.group(2));
+                            tmpSafeVersionList.add(tmpSafeVersion);
+
+                            inputLine = readNextLine(raw, bufferedReader);
+                            continue;
+                        }
+
+                        m = safePackageOnlyLine.matcher(inputLine);
+                        if (m.matches()) {
+                            // System.out.println("got package: " + inputLine);
+                            StringBuilder tmpSafePackageVersionLine = new StringBuilder(inputLine.trim());
+                            inputLine = readNextLine(raw, bufferedReader);
+                            Matcher v = safeVersionOnlyLine.matcher(inputLine);
+                            if (v.matches()) {
+                                // System.out.println("got version: " + inputLine);
+                                tmpSafePackageVersionLine.append(" ").append(inputLine.trim());
+                                Matcher s = safePackageVersionLine.matcher(tmpSafePackageVersionLine);
+                                if (s.matches()) {
+                                    LinkedHashMap<String, String> tmpSafeVersion = new LinkedHashMap<>();
+                                    tmpSafeVersion.put("ubuntu", ubuntuVersion);
+                                    if (s.group(1).endsWith(":") && s.group(1).charAt(s.group(1).length() - 2) != ':') {
+                                        tmpSafeVersion.put("pkg", s.group(1).substring(0, s.group(1).length() - 1));
+                                    } else {
+                                        tmpSafeVersion.put("pkg", s.group(1));
+                                    }
+                                    tmpSafeVersion.put("v", s.group(2));
+                                    tmpSafeVersionList.add(tmpSafeVersion);
+
+                                    inputLine = readNextLine(raw, bufferedReader);
+                                    continue;
+                                }
+                            }
+                        }
+
+                        if (inputLine.trim().length() < 1) {
+                            // ubuntuVersion = "";
+                            inputLine = readNextLine(raw, bufferedReader);
+                            continue;
+                        }
+
+                        // didn't match any of the above, break loop
+                        break;
+                    }
+
+                    usn.put("safeVersions", tmpSafeVersionList);
+
+                    // the next line has already been read
+                    readNextInputLine = false;
+                    continue;
+                }
+
+                // Special matcher for USN-612-2, largely copied from above
+                matcher = updatingYourSystemLine.matcher(inputLine);
+                if (matcher.matches()) {
+                    // System.out.println(matcher.group(0));
+                    // skip lines after the section header, until we find a Ubuntu version line
+                    while ((inputLine = readNextLine(raw, bufferedReader)) != null) {
+                        if (ubuntuVersionIndent3Line.matcher(inputLine).matches()) {
+                            break;
+                        }
+                    }
+
+                    ArrayList<LinkedHashMap<String, String>> tmpSafeVersionList = new ArrayList<>();
+                    String ubuntuVersion = "";
+                    while (inputLine != null) {
+                        // - we can get a new ubuntu version line multiple times
+                        // - when we find a safe package version line, associate it with the preceding
+                        // ..ubuntu version
+                        // - ignore empty lines
+                        // - as soon as we find a non-empty line that does not match a ubuntu version
+                        // ..line or a safe package version line, we know that the section has ended
+                        Matcher m = ubuntuVersionIndent3Line.matcher(inputLine);
+                        if (m.matches()) {
+                            // System.out.println(m.group(0));
+                            ubuntuVersion = m.group(1);
                         } else {
-                            m = safePackageVersionLine.matcher(inputLine);
+                            m = safePackageVersionIndent5Line.matcher(inputLine);
                             if (m.matches()) {
                                 LinkedHashMap<String, String> tmpSafeVersion = new LinkedHashMap<>();
                                 tmpSafeVersion.put("ubuntu", ubuntuVersion);
@@ -622,6 +1043,7 @@ public class UsnToJson {
 
                     // the next line has already been read
                     readNextInputLine = false;
+                    continue;
                 }
             }
         } catch (FileNotFoundException e) {

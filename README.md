@@ -17,7 +17,7 @@ These data can be parsed, with some caveats as described below:
 - `cves`
 - `safeVersions`
 
-No concise `description` can be parsed yet, until [2011-April](#2011-april).
+No concise `description` can be parsed, until [2011-April](#2011-april).
 
 ### 2004-October (2)
 
@@ -44,25 +44,190 @@ CAN-2004-1068, CAN-2004-1069, CAN-2004-1137, CAN-2004-1151
 
 ### 2004-October (3)
 
-No safe versions section, need to parse paragraph (NOT DONE YET)
+Information about safe package versions need to be extracted from a special textual paragraph.
 
 ```txt
+A security issue affects the following Ubuntu releases:
+
+Ubuntu 4.10 (Warty Warthog)
+Ubuntu 5.04 (Hoary Hedgehog)
+
 The following packages are affected:
 
 mozilla-thunderbird
+mozilla-thunderbird-enigmail
 
 The problem can be corrected by upgrading the affected package to
-version 1.0.8-0ubuntu05.04 (for Ubuntu 5.04) or 1.0.8-0ubuntu05.10.1
-(for Ubuntu 5.10). After a standard system upgrade you need to restart
-Thunderbird to effect the necessary changes.
+version 1.0.6-0ubuntu04.10 (for Ubuntu 4.10), or 1.0.6-0ubuntu05.04
+(for Ubuntu 5.04).  You need to restart Thunderbird after a standard
+system upgrade to effect the necessary changes.
+
+The current Enigmail plugin is not compatible any more with the
+Thunderbird version shipped in this security update, so the
+mozilla-thunderbird-enigmail package needs to be updated as well. An
+update is already available for Ubuntu 5.04, and will be delivered
+shortly for Ubuntu 4.10.
+
 
 Details follow:
 ```
 
+```txt
+A security issue affects the following Ubuntu releases:
+
+Ubuntu 4.10 (Warty Warthog)
+
+The following packages are affected:
+
+libpng12-0
+libpng12-dev
+libpng10-0
+libpng10-dev
+
+The problem can be corrected by upgrading the affected package to version
+1.2.5.0-7ubuntu1 (libpng12-0 and libpng12-dev) or 1.0.15-6ubuntu1
+(libpng10-0 and libpng10-dev).  In general, a standard system upgrade is
+sufficient to effect the necessary changes.
+
+Details follow:
+```
+
+### 2005-May
+
+The architecture name is spelled out inside the brackets -- we just ignore them.
+
+```txt
+A security issue affects the following Ubuntu releases:
+
+Ubuntu 4.10 (Warty Warthog)
+Ubuntu 5.04 (Hoary Hedgehog)
+
+The following packages are affected:
+
+openoffice.org-bin
+openoffice.org-l10n-xh
+
+The problem can be corrected by upgrading the affected package to
+version 1.1.2-2ubuntu6.1 (for Ubuntu 4.10 on i386 and powerpc),
+1.1.2-2ubuntu6.1-1 (for Ubuntu 4.10 on amd64), 1.1.3-8ubuntu2.3 (for
+Ubuntu 5.04 on i386 and powerpc), or 1.1.3-8ubuntu2.3-1 (for Ubuntu
+5.04 on amd64).  In general, a standard system upgrade is sufficient
+to effect the necessary changes.
+```
+
+### 2005-July
+
+During 2005, some emails have this format:
+
+```txt
+A security issue affects the following Ubuntu releases:
+
+Ubuntu 4.10 (Warty Warthog)
+Ubuntu 5.04 (Hoary Hedgehog)
+
+The following packages are affected:
+
+libapache2-mod-php4
+php4-pear
+
+The problem can be corrected by upgrading the affected package to
+version 4:4.3.8-3ubuntu7.9 (for Ubuntu 4.10), or 4:4.3.10-10ubuntu3.1
+(for Ubuntu 5.04).  In general, a standard system upgrade is
+sufficient to effect the necessary changes.
+
+Details follow:
+```
+
+### 2005-August (1)
+
+During 2005, some emails have this format:
+- starts with `On Ubuntu`
+- more than one paragraph
+- more than 2 versions per paragraph
+- sometimes have spaces next to brackets
+
+```txt
+A security issue affects the following Ubuntu releases:
+
+Ubuntu 4.10 (Warty Warthog)
+Ubuntu 5.04 (Hoary Hedgehog)
+
+The following packages are affected:
+
+gnumeric
+python2.1
+python2.2
+python2.3
+
+On Ubuntu 4.10, the problem can be corrected by upgrading the affected
+package to version 1.2.13-1ubuntu2.1 (gnumeric), 2.1.3-24.ubuntu0.1
+(python2.1), 2.2.3-10.ubuntu0.2 (python2.2), and 2.3.4-2.ubuntu0.2
+(python2.3).
+
+On Ubuntu 5.04, the problem can be corrected by upgrading the affected
+package to version 1.4.2-1ubuntu3.1 (gnumeric), 2.2.3dfsg-1ubuntu0.1
+(python2.2),  and 2.3.5-2ubuntu0.1 (python2.3).  
+
+After performing a standard system upgrade you need to restart
+gnumeric and all python server applications to effect the necessary
+changes.
 
 
+Details follow:
+```
 
+```txt
+A security issue affects the following Ubuntu releases:
 
+Ubuntu 4.10 (Warty Warthog)
+Ubuntu 5.04 (Hoary Hedgehog)
+
+The following packages are affected:
+
+kerberos4kth-clients
+krb5-clients
+krb5-kdc
+krb5-rsh-server
+krb5-telnetd
+
+On Ubuntu 4.10, the problem can be corrected by upgrading the affected
+package to version 1.2.2-10ubuntu0.1 (kerberos4kth-clients), and
+1.3.4-3ubuntu0.2 (krb5-clients, krb5-kdc, krb5-rsh-server,
+krb5-telnetd).
+
+On Ubuntu 5.04, the problem can be corrected by upgrading the affected
+package to version 1.2.2-10ubuntu0.1 (kerberos4kth-client ), and
+1.3.6-1ubuntu0.1 (krb5-clients, krb5-kdc, krb5-rsh-server,
+krb5-telnetd).  
+
+In general, a standard system upgrade is sufficient to effect the
+necessary changes.
+
+Details follow:
+```
+
+### 2005-August (2)
+
+Sometimes the information inside the brackets override the previous listed info.
+
+```txt
+A security issue affects the following Ubuntu releases:
+
+Ubuntu 4.10 (Warty Warthog)
+Ubuntu 5.04 (Hoary Hedgehog)
+
+The following packages are affected:
+
+xpdf-reader
+xpdf-utils
+kpdf
+
+The problem can be corrected by upgrading the affected package to
+version 3.00-8ubuntu1.5 (for Ubuntu 4.10), or 3.00-11ubuntu3.1
+(xpdf-reader and xpdf-utils for Ubuntu 5.04) and 4:3.4.0-0ubuntu3.1
+(kpdf for Ubuntu 5.04).  In general, a standard system upgrade is
+sufficient to effect the necessary changes.
+```
 
 ### 2005-October
 

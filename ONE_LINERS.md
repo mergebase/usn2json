@@ -47,3 +47,27 @@ Use the script to filter an email archive for viewing:
 ```sh
 $ cat 2006-May.txt | awk -f script.awf | less
 ```
+
+## Find empty lists in the generated JSON
+
+From generated json files inside directory `USN`:
+
+```sh
+$ grep '\[\]' USN/*/*/*
+```
+
+## Find USN's without safeVersions
+
+From generated json files inside directory `USN`:
+
+```sh
+$ grep '\[\]' USN/*/*/* | grep -e safeVersions
+```
+
+## Find USN's without cves
+
+From generated json files inside directory `USN`:
+
+```sh
+$ grep '\[\]' USN/*/*/* | grep -e cves
+```
