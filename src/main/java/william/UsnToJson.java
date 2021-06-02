@@ -18,7 +18,9 @@ import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.zip.GZIPInputStream;
@@ -81,6 +83,51 @@ public class UsnToJson {
             throw new RuntimeException(errMsg, ioe);
         }
 
+        /*
+        Ugh, turns out older (pre 2012) data files need us to grab version directly from the patch URL.
+        e.g., from things like this:
+
+            http://security.ubuntu.com/ubuntu/pool/main/g/glibc/libc6-dbg_2.7-10ubuntu7_amd64.deb
+            http://security.ubuntu.com/ubuntu/pool/main/g/glibc/libc6-dev-i386_2.7-10ubuntu7_amd64.deb
+            http://security.ubuntu.com/ubuntu/pool/main/g/glibc/libc6-dev_2.7-10ubuntu7_amd64.deb
+
+        Code below is a quick hack to achieve that.  Looks for any occurrence of "http://***.deb" in the
+        email.  William's code carefully maintains context but this hack does not. Nonetheless I think it will be fine.
+
+         */
+        for (String s : lines) {
+            s = s.trim();
+            if (s.startsWith("http://") || s.startsWith("https://")) {
+                if (s.endsWith(".deb")) {
+
+                    List<Map<String, String>> safeVersions = (List) usn.get("safeVersions");
+                    if (safeVersions == null) {
+                        safeVersions = new ArrayList<>();
+                        usn.put("safeVersions", safeVersions);
+                    }
+
+                    int x = s.lastIndexOf('/');
+                    if (x >= 0) {
+                        s = s.substring(x + 1);
+                        x = s.indexOf('_');
+                        if (x > 0) {
+                            String pkg = s.substring(0, x);
+                            s = s.substring(x + 1);
+                            x = s.indexOf('_');
+                            if (x > 0) {
+                                String version = s.substring(0, x);
+                                Map<String, String> safeVersion = new LinkedHashMap<>();
+                                safeVersion.put("pkg", pkg);
+                                safeVersion.put("v", version);
+                                safeVersions.add(safeVersion);
+                            }
+                        }
+                    }
+
+                }
+            }
+        }
+
         orderedUsn.put("raw_email", lines);
         orderedUsn.put("message-id", usn.getOrDefault("message-id", ""));
         orderedUsn.put("id", usn.getOrDefault("id", ""));
@@ -95,7 +142,7 @@ public class UsnToJson {
     }
 
     private static void printToFile(LinkedHashMap<String, Object> usn, StringBuilder rawMsg, String year, String month,
-            boolean writeToStdOut) {
+                                    boolean writeToStdOut) {
         usn = reorder(usn, rawMsg);
         if (writeToStdOut) {
             printToStdout(usn, rawMsg);
@@ -167,7 +214,7 @@ public class UsnToJson {
         // if the last line of the StringBuilder is the next email's initial From line,
         // slice it off and return it as String
         int lastNewline = rawMsg.lastIndexOf("\n", rawMsg.length() - 2); // using rawMsg.length()-1 refers to the
-                                                                         // trailing newline
+        // trailing newline
         // if lastNewline is -1, when we add 1, it becomes 0
         // so, no need to check or change here
         String lastLine = rawMsg.substring(lastNewline + 1, rawMsg.length());
@@ -182,7 +229,7 @@ public class UsnToJson {
     }
 
     public static void processFile(String filename, String compression, String year, String month, String encoding,
-            boolean writeToStdout) {
+                                   boolean writeToStdout) {
         if (filename == null || filename.length() < 1) {
             return;
         }
@@ -700,19 +747,16 @@ public class UsnToJson {
                         // System.out.println();
 
                         ArrayList<String> tmpSafeVersions = new ArrayList<String>(
-                            Arrays.asList(
-                                tmpProblemParagraph
-                                    .toString()
-                                    // .replaceAll("\\(\\)", " AND ")
-                                    .replaceAll("\\),?\\s+((and|or)\\s+)?", ")\n")
-                                    // .replaceAll("\\),\\s+((and|or)\\s+)?", ")\n")
-                                    // .replaceAll("\\)[,]?\\s+(and|or)\\s+", ")\n")
-                                    .split("\n")));
+                                Arrays.asList(
+                                        tmpProblemParagraph
+                                                .toString()
+                                                // .replaceAll("\\(\\)", " AND ")
+                                                .replaceAll("\\),?\\s+((and|or)\\s+)?", ")\n")
+                                                // .replaceAll("\\),\\s+((and|or)\\s+)?", ")\n")
+                                                // .replaceAll("\\)[,]?\\s+(and|or)\\s+", ")\n")
+                                                .split("\n")));
                         // System.out.println(tmpSafeVersions);
                         // System.out.println();
-
-
-
 
 
                         ArrayList<LinkedHashMap<String, String>> tmpSafeVersionList = new ArrayList<>();
